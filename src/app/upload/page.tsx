@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { requireUser, signOut } from "@/lib/supabase/auth";
 import {
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
@@ -64,7 +66,29 @@ function downloadTemplate(type: "companies" | "production" | "inventory") {
 export default function UploadPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+const router = useRouter();
+const [authReady, setAuthReady] = useState(false);
+const [userEmail, setUserEmail] = useState("");
 
+useEffect(() => {
+  (async () => {
+    const user = await requireUser();
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    setUserEmail(user.email || "");
+    setAuthReady(true);
+  })();
+}, [router]);
+
+if (!authReady) {
+  return (
+    <div className="min-h-screen bg-surface flex items-center justify-center text-muted text-sm">
+      Checking login…
+    </div>
+  );
+}
   const show = (text: string) => setMessage(text);
 
   const ensureCompanyId = async (companyName: string) => {
@@ -251,12 +275,22 @@ export default function UploadPage() {
           </div>
           <span className="text-white font-bold text-sm">JSK DataX Services</span>
         </div>
-        <div className="flex gap-4 text-sm">
-          <Link href="/" className="text-white/70 hover:text-white">
-            Dashboard
-          </Link>
-          <span className="text-saffron font-semibold">Upload Sheet</span>
-        </div>
+        <div className="flex gap-4 text-sm items-center">
+  <Link href="/" className="text-white/70 hover:text-white">
+    Dashboard
+  </Link>
+  <span className="text-saffron font-semibold">Upload Sheet</span>
+  <button
+    type="button"
+    onClick={async () => {
+      await signOut();
+      router.push("/login");
+    }}
+    className="text-white/70 text-sm hover:text-white"
+  >
+    Logout
+  </button>
+ </div>
       </nav>
 
       <main className="max-w-2xl mx-auto px-4 py-8">

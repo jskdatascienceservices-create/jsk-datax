@@ -197,6 +197,12 @@ export default function DashboardPage() {
           <a href="/share" className="text-sm font-semibold px-3 py-1.5 bg-saffron text-white rounded-lg">
             Share
           </a>
+          <a
+  href="/login"
+  className="text-sm font-semibold px-3 py-1.5 bg-white/10 text-white rounded-lg hover:bg-white/20"
+>
+  Login
+</a>
         </div>
       </nav>
 
