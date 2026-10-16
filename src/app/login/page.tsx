@@ -13,13 +13,15 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const login = async (e: React.FormEvent) => {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
     if (!isSupabaseConfigured()) {
       setError("Supabase not configured");
       return;
     }
+
     setLoading(true);
     try {
       const { error: err } = await getSupabase().auth.signInWithPassword({
@@ -36,12 +38,13 @@ export default function LoginPage() {
       } else {
         router.push("/pricing");
       }
-      router.refresh();
-    } catch (e: any) {
-      setError(e?.message || "Login failed");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Login failed";
+      setError(message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  };
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center px-4">
@@ -56,7 +59,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <form onSubmit={login} className="space-y-4">
+        <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="text-xs text-slate-500">Email</label>
             <input
@@ -77,9 +80,13 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          {error && (
-            <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
-          )}
+
+          {error ? (
+            <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          ) : null}
+
           <button
             type="submit"
             disabled={loading}
@@ -96,3 +103,6 @@ export default function LoginPage() {
           </Link>
         </p>
       </div>
+    </div>
+  );
+}

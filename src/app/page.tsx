@@ -172,7 +172,7 @@ export default function DashboardPage() {
           <div className="w-7 h-7 bg-saffron rounded-lg flex items-center justify-center text-white text-xs font-extrabold">
             J
           </div>
-          <span className="text-white font-bold text-sm">JSK DataX Services</span>
+          <span className="text-white font-bold text-sm">Loomvex</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {companies.length > 1 && (
@@ -202,6 +202,12 @@ export default function DashboardPage() {
   className="text-sm font-semibold px-3 py-1.5 bg-white/10 text-white rounded-lg hover:bg-white/20"
 >
   Login
+</a>
+<a
+  href="/signup"
+  className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white"
+>
+  Sign up
 </a>
         </div>
       </nav>
