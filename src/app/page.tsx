@@ -209,6 +209,12 @@ export default function DashboardPage() {
 >
   Sign up
 </a>
+<a href="/history" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
+  History
+</a>
+<a href="/reports" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
+  Reports
+</a>
         </div>
       </nav>
 

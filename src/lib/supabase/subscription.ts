@@ -1,5 +1,7 @@
 "use client";
 
+import { isFounder } from "./admin";
+
 import { getSupabase, isSupabaseConfigured } from "./client";
 
 export type PlanId = "basic" | "advance" | "ultra";
@@ -71,15 +73,18 @@ export async function getActiveSubscription(companyId: string): Promise<SubRow |
   return data as SubRow;
 }
 
-export function canUseHistory(plan: PlanId | null) {
+export function canUseHistory(plan: PlanId | null, email?: string | null) {
+  if (isFounder(email)) return true;
   return plan === "advance" || plan === "ultra";
 }
 
-export function canUseReports(plan: PlanId | null) {
+export function canUseReports(plan: PlanId | null, email?: string | null) {
+  if (isFounder(email)) return true;
   return plan === "advance" || plan === "ultra";
 }
 
-export function canUseAI(plan: PlanId | null, paidMonths: number) {
+export function canUseAI(plan: PlanId | null, paidMonths: number, email?: string | null) {
+  if (isFounder(email)) return true;
   return plan === "ultra" && paidMonths >= 3;
 }
 

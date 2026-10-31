@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { getProfile, getActiveSubscription } from "@/lib/supabase/subscription";
+import { isFounder } from "@/lib/supabase/admin";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,8 +32,20 @@ export default function LoginPage() {
       if (err) throw err;
 
       const profile = await getProfile();
+      const userEmail = profile?.email || email.trim();
+
       if (profile?.company_id) {
         localStorage.setItem("jsk_active_company", profile.company_id);
+      }
+
+      // Founder → dashboard, no payment
+      if (isFounder(userEmail)) {
+        router.push("/");
+        return;
+      }
+
+      // Other companies → need active plan
+      if (profile?.company_id) {
         const sub = await getActiveSubscription(profile.company_id);
         router.push(sub ? "/" : "/pricing");
       } else {
