@@ -83,7 +83,11 @@ export function canUseReports(plan: PlanId | null, email?: string | null) {
   return plan === "advance" || plan === "ultra";
 }
 
-export function canUseAI(plan: PlanId | null, paidMonths: number, email?: string | null) {
+export function canUseAI(
+  plan: PlanId | null,
+  paidMonths: number,
+  email?: string | null
+) {
   if (isFounder(email)) return true;
   return plan === "ultra" && paidMonths >= 3;
 }

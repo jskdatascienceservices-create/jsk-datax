@@ -215,6 +215,9 @@ export default function DashboardPage() {
 <a href="/reports" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
   Reports
 </a>
+<a href="/ai" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
+  AI
+</a>
         </div>
       </nav>
 
