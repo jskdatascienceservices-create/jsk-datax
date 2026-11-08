@@ -17,32 +17,25 @@ export default function SignupPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
     if (!isSupabaseConfigured()) {
       setError("Supabase not configured");
+      return;
+    }
+    if (!companyName.trim()) {
+      setError("Enter company / mill name");
       return;
     }
     if (password.length < 6) {
       setError("Password must be at least 6 characters");
       return;
     }
+
     setLoading(true);
     try {
       const sb = getSupabase();
 
-      // 1) Create company
-      const { data: company, error: cErr } = await sb
-        .from("companies")
-        .insert({
-          name: companyName.trim(),
-          location: "",
-          price_per_metre: 15,
-          working_days_per_month: 26,
-        })
-        .select()
-        .single();
-      if (cErr) throw cErr;
-
-      // 2) Create auth user
+      // 1) Create auth user FIRST
       const { data: auth, error: aErr } = await sb.auth.signUp({
         email: email.trim(),
         password,
@@ -50,7 +43,28 @@ export default function SignupPage() {
       if (aErr) throw aErr;
       if (!auth.user) throw new Error("Signup failed");
 
-      // 3) Profile link
+      // 2) Must have a session for RLS (turn OFF "Confirm email" in Supabase for testing)
+      if (!auth.session) {
+        throw new Error(
+          "Account created. Confirm your email, then log in. Or disable Confirm email in Supabase → Authentication → Providers → Email."
+        );
+      }
+
+      // 3) Create company (now authenticated)
+      const { data: company, error: cErr } = await sb
+        .from("companies")
+        .insert({
+          name: companyName.trim(),
+          location: "",
+          owner_name: fullName.trim() || "",
+          price_per_metre: 15,
+          working_days_per_month: 26,
+        })
+        .select()
+        .single();
+      if (cErr) throw cErr;
+
+      // 4) Link profile (id must equal auth.user.id for RLS)
       const { error: pErr } = await sb.from("profiles").upsert({
         id: auth.user.id,
         company_id: company.id,
@@ -61,10 +75,12 @@ export default function SignupPage() {
 
       localStorage.setItem("jsk_active_company", company.id);
       router.push("/pricing");
-    } catch (err: any) {
-      setError(err?.message || "Signup failed");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Signup failed";
+      setError(message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -85,16 +101,16 @@ export default function SignupPage() {
             <label className="text-xs text-slate-500">Company / mill name *</label>
             <input
               required
-              className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="e.g. Sharma Textiles"
+              placeholder="e.g. HIMA TEXTILE"
             />
           </div>
           <div>
             <label className="text-xs text-slate-500">Your name</label>
             <input
-              className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
             />
@@ -104,7 +120,7 @@ export default function SignupPage() {
             <input
               type="email"
               required
-              className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
@@ -114,14 +130,19 @@ export default function SignupPage() {
             <input
               type="password"
               required
-              className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+              minLength={6}
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          {error && (
-            <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
-          )}
+
+          {error ? (
+            <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          ) : null}
+
           <button
             type="submit"
             disabled={loading}

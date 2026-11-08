@@ -1,297 +1,309 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  calcDefectRate,
-  calcAchievementPct,
-  calcDaysRemaining,
-  getStockStatus,
-  getDefectStatus,
-  formatINR,
-  formatNumber,
-} from "@/lib/calculations";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { isSupabaseConfigured, getSupabase } from "@/lib/supabase/client";
 import {
   fetchCompanies,
   fetchProduction,
-  fetchInventory,
   type DbCompany,
+  type DbProduction,
 } from "@/lib/supabase/data";
-import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { requireLoggedIn } from "@/lib/supabase/requireAuth";
+import { getProfile } from "@/lib/supabase/subscription";
+import { isFounder } from "@/lib/supabase/admin";
+
+function formatINR(n: number) {
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
+  return `₹${Math.round(n)}`;
+}
+
+function defectPct(meters: number, defect: number) {
+  if (meters <= 0) return 0;
+  return (defect / meters) * 100;
+}
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [showToast, setShowToast] = useState(false);
-  const [animated, setAnimated] = useState(false);
-  const [company, setCompany] = useState<DbCompany | null>(null);
+  const [email, setEmail] = useState("");
   const [companies, setCompanies] = useState<DbCompany[]>([]);
-  const [error, setError] = useState("");
+  const [companyId, setCompanyId] = useState("");
+  const [production, setProduction] = useState<DbProduction[]>([]);
+  const [msg, setMsg] = useState("");
 
-  const [loomRows, setLoomRows] = useState<
-    { loom: string; shift: string; meters: number; rate: number; status: "normal" | "watch" | "alert" }[]
-  >([]);
-  const [shiftTotals, setShiftTotals] = useState({ morning: 0, afternoon: 0, night: 0 });
-  const [totalMeters, setTotalMeters] = useState(0);
-  const [avgDefect, setAvgDefect] = useState(0);
-  const [criticalLoom, setCriticalLoom] = useState<{ loom: string; rate: number } | null>(null);
-  const [revenue, setRevenue] = useState(0);
-  const [inventoryItems, setInventoryItems] = useState<
-    { name: string; quantity: number; unit: string; days: number; status: "ok" | "warn" | "low"; icon: string }[]
-  >([]);
-  const [insights, setInsights] = useState<{ type: "critical" | "warning" | "success"; text: string }[]>([]);
-
-  const load = async (companyId?: string) => {
+  const load = async () => {
     setLoading(true);
-    setError("");
+    setMsg("");
+
+    // --- must be logged in ---
+    const auth = await requireLoggedIn();
+    if (!auth.ok) {
+      router.replace("/login");
+      return;
+    }
+    setEmail(auth.email);
+
+    if (!isSupabaseConfigured()) {
+      setMsg("Supabase not configured");
+      setLoading(false);
+      return;
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        setError("Supabase not configured. Check .env.local / Vercel env vars.");
-        setLoading(false);
-        return;
-      }
-
+      const profile = await getProfile();
       const list = await fetchCompanies();
-      setCompanies(list);
+      setCompanies(list || []);
 
-      if (list.length === 0) {
-        setCompany(null);
-        setLoomRows([]);
-        setTotalMeters(0);
-        setRevenue(0);
-        setInventoryItems([]);
-        setLoading(false);
-        setAnimated(true);
-        return;
-      }
+      let active =
+        profile?.company_id ||
+        localStorage.getItem("jsk_active_company") ||
+        list?.[0]?.id ||
+        "";
 
-      const activeId = companyId || localStorage.getItem("jsk_active_company") || list[0].id;
-      const active = list.find((c) => c.id === activeId) || list[0];
-      setCompany(active);
-      localStorage.setItem("jsk_active_company", active.id);
-
-      const [prod, inv] = await Promise.all([
-        fetchProduction(active.id),
-        fetchInventory(active.id),
-      ]);
-
-      const price = Number(active.price_per_metre) || 15;
-
-      const rows = prod.map((p) => {
-        const rate = calcDefectRate(Number(p.defect_meters), Number(p.meters));
-        return {
-          loom: p.loom,
-          shift: p.shift,
-          meters: Number(p.meters),
-          rate,
-          status: getDefectStatus(rate),
-        };
-      });
-      const shiftOrder = { morning: 0, afternoon: 1, night: 2 };
-      rows.sort((a, b) => {
-        if (a.loom !== b.loom) return a.loom.localeCompare(b.loom);
-        return (shiftOrder[a.shift as keyof typeof shiftOrder] ?? 0) - (shiftOrder[b.shift as keyof typeof shiftOrder] ?? 0);
-      });
-      setLoomRows(rows);
-
-      const shifts = { morning: 0, afternoon: 0, night: 0 };
-      prod.forEach((p) => {
-        const s = p.shift as keyof typeof shifts;
-        if (shifts[s] !== undefined) shifts[s] += Number(p.meters);
-      });
-      setShiftTotals(shifts);
-
-      const totalM = prod.reduce((s, p) => s + Number(p.meters), 0);
-      const totalD = prod.reduce((s, p) => s + Number(p.defect_meters), 0);
-      setTotalMeters(totalM);
-      setAvgDefect(totalM > 0 ? calcDefectRate(totalD, totalM) : 0);
-      setRevenue(totalM * price);
-
-      if (rows.length > 0) {
-        const worst = [...rows].sort((a, b) => b.rate - a.rate)[0];
-        setCriticalLoom({ loom: worst.loom, rate: worst.rate });
+      if (active && list?.some((c) => c.id === active)) {
+        localStorage.setItem("jsk_active_company", active);
       } else {
-        setCriticalLoom(null);
+        active = list?.[0]?.id || "";
+        if (active) localStorage.setItem("jsk_active_company", active);
       }
 
-      const invDisplay = inv.map((item, idx) => {
-        const days = calcDaysRemaining(Number(item.quantity), Number(item.daily_usage));
-        return {
-          name: item.name,
-          quantity: Number(item.quantity),
-          unit: item.unit || "kg",
-          days,
-          status: getStockStatus(days),
-          icon: ["🧵", "🧶", "🔵", "🪡", "🛢️"][idx % 5],
-        };
-      });
-      setInventoryItems(invDisplay);
+      setCompanyId(active);
 
-      const ins: { type: "critical" | "warning" | "success"; text: string }[] = [];
-      if (rows.some((r) => r.status === "alert")) {
-        ins.push({
-          type: "critical",
-          text: `High defect on Loom ${rows.filter((r) => r.status === "alert").map((r) => r.loom).join(", ")}.`,
-        });
+      if (active) {
+        const prod = await fetchProduction(active);
+        setProduction(prod || []);
+      } else {
+        setProduction([]);
+        setMsg("No company linked. Complete Sign up or Setup.");
       }
-      const low = invDisplay.filter((i) => i.status === "low");
-      if (low.length) {
-        ins.push({
-          type: "warning",
-          text: `Low stock: ${low.map((i) => i.name).join(", ")}.`,
-        });
-      }
-      if (totalM > 0) {
-        ins.push({
-          type: "success",
-          text: `${formatNumber(totalM)} m × ₹${price} = ${formatINR(totalM * price)}`,
-        });
-      }
-      setInsights(ins.length ? ins : [{ type: "success", text: "No data yet. Upload CSV or insert data." }]);
-    } catch (e) {
-      console.error(e);
-      setError("Failed to load from Supabase. Check tables, RLS policies, and env keys.");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to load";
+      setMsg(message);
     }
     setLoading(false);
-    setAnimated(true);
-    setTimeout(() => setShowToast(true), 1500);
   };
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const lowestStock =
-    inventoryItems.length > 0
-      ? inventoryItems.reduce((min, i) => (i.days < min.days ? i : min))
-      : null;
+  const company = companies.find((c) => c.id === companyId) || null;
+  const price = Number(company?.price_per_metre ?? 15);
   const target = 500;
 
+  const rows = useMemo(() => {
+    return (production || []).map((r) => {
+      const meters = Number((r as any).meters ?? 0);
+      const defect = Number((r as any).defect_meters ?? 0);
+      const pct = defectPct(meters, defect);
+      return {
+        loom: String((r as any).loom ?? ""),
+        shift: String((r as any).shift ?? ""),
+        meters,
+        defect,
+        pct,
+        status: pct <= 3 ? "OK" : "HIGH",
+      };
+    });
+  }, [production]);
+
+  const totals = useMemo(() => {
+    const meters = rows.reduce((s, r) => s + r.meters, 0);
+    const defect = rows.reduce((s, r) => s + r.defect, 0);
+    const byShift: Record<string, number> = {};
+    for (const r of rows) {
+      const k = r.shift || "—";
+      byShift[k] = (byShift[k] || 0) + r.meters;
+    }
+    const worst = rows.reduce(
+      (w, r) => (r.pct > (w?.pct || 0) ? r : w),
+      null as null | (typeof rows)[0]
+    );
+    return {
+      meters,
+      defect,
+      avgPct: defectPct(meters, defect),
+      revenue: meters * price,
+      byShift,
+      worst,
+    };
+  }, [rows, price]);
+
+  const onSelectCompany = async (id: string) => {
+    setCompanyId(id);
+    localStorage.setItem("jsk_active_company", id);
+    setLoading(true);
+    const prod = await fetchProduction(id);
+    setProduction(prod || []);
+    setLoading(false);
+  };
+
+  const logout = async () => {
+    await getSupabase().auth.signOut();
+    localStorage.removeItem("jsk_active_company");
+    router.replace("/login");
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] text-slate-500 text-sm">
+        Loading dashboard…
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-surface">
-      <nav className="bg-ink h-14 px-6 flex items-center justify-between sticky top-0 z-50">
+    <div className="min-h-screen bg-[#F8FAFC]">
+      <nav className="bg-[#0F1624] px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 bg-saffron rounded-lg flex items-center justify-center text-white text-xs font-extrabold">
-            J
+          <div className="w-8 h-8 bg-[#E8820C] rounded-lg flex items-center justify-center text-white text-sm font-extrabold">
+            L
           </div>
-          <span className="text-white font-bold text-sm">Loomvex</span>
+          <div>
+            <div className="text-white font-bold text-sm">Loomvex</div>
+            <div className="text-[10px] text-white/50">
+              {isFounder(email) ? "Founder" : "Cloud dashboard"}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {companies.length > 1 && (
+
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {companies.length > 0 && (
             <select
-              className="text-xs bg-white/10 text-white border border-white/20 rounded-lg px-2 py-1.5"
-              value={company?.id || ""}
-              onChange={(e) => load(e.target.value)}
+              value={companyId}
+              onChange={(e) => onSelectCompany(e.target.value)}
+              className="bg-white/10 text-white text-xs rounded-lg px-2 py-1.5 border border-white/20"
             >
               {companies.map((c) => (
-                <option key={c.id} value={c.id} className="text-ink">
+                <option key={c.id} value={c.id} className="text-black">
                   {c.name}
                 </option>
               ))}
             </select>
           )}
-          <a href="/upload" className="text-sm font-semibold px-3 py-1.5 bg-white/10 text-white rounded-lg">
+          <Link href="/upload" className="px-3 py-1.5 rounded-lg text-white/80 hover:text-white">
             Upload
-          </a>
-          <a href="/setup" className="text-sm font-semibold px-3 py-1.5 bg-white/10 text-white rounded-lg">
+          </Link>
+          <Link href="/setup" className="px-3 py-1.5 rounded-lg text-white/80 hover:text-white">
             Setup
-          </a>
-          <a href="/share" className="text-sm font-semibold px-3 py-1.5 bg-saffron text-white rounded-lg">
+          </Link>
+          <Link href="/share" className="px-3 py-1.5 rounded-lg bg-[#E8820C] text-white font-semibold">
             Share
-          </a>
-          <a
-  href="/login"
-  className="text-sm font-semibold px-3 py-1.5 bg-white/10 text-white rounded-lg hover:bg-white/20"
->
-  Login
-</a>
-<a
-  href="/signup"
-  className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white"
->
-  Sign up
-</a>
-<a href="/history" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
-  History
-</a>
-<a href="/reports" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
-  Reports
-</a>
-<a href="/ai" className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white/80 hover:text-white">
-  AI
-</a>
+          </Link>
+          <Link href="/history" className="px-3 py-1.5 rounded-lg text-white/80 hover:text-white">
+            History
+          </Link>
+          <Link href="/reports" className="px-3 py-1.5 rounded-lg text-white/80 hover:text-white">
+            Reports
+          </Link>
+          <Link href="/ai" className="px-3 py-1.5 rounded-lg text-white/80 hover:text-white">
+            AI
+          </Link>
+          <button
+            type="button"
+            onClick={logout}
+            className="px-3 py-1.5 rounded-lg bg-white/10 text-white text-xs font-semibold"
+          >
+            Log out
+          </button>
         </div>
       </nav>
 
-      <div className="bg-gradient-to-br from-ink to-ink-2 px-6 py-5 border-b-2 border-saffron">
-        <div className="text-[10px] font-semibold tracking-widest text-saffron uppercase mb-1">
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <p className="text-xs font-semibold tracking-widest text-[#E8820C] uppercase mb-1">
           Cloud dashboard · Supabase
-        </div>
-        <h1 className="text-xl font-bold text-white">
-          {loading ? "Loading…" : company ? company.name : "No company in database"}
-        </h1>
-        <p className="text-sm text-white/50 mt-1">
-          {company
-            ? `${company.location || ""} · ₹${company.price_per_metre}/metre · Revenue = metres × price`
-            : "Upload Companies + Production CSV to Supabase"}
         </p>
-      </div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#0F1624]">
+          {company?.name || "No company"}
+        </h1>
+        <p className="text-sm text-slate-500 mt-1 mb-6">
+          {company?.location || "—"} · ₹{price}/metre · Revenue = metres × price
+        </p>
 
-      <main className="px-6 py-6 max-w-[1280px] mx-auto">
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{error}</div>
+        {msg && (
+          <div className="mb-4 text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2">
+            {msg}
+          </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-          <KPI label="Production" value={formatNumber(totalMeters)} sub="metres" accent="bg-saffron" barColor="bg-saffron" bar={60} animated={animated} />
-          <KPI label="Avg Defect" value={`${avgDefect}%`} sub="auto" accent="bg-green-600" barColor="bg-green-600" bar={Math.min(avgDefect * 8, 100)} animated={animated} />
-          <KPI
-            label={criticalLoom ? `Loom ${criticalLoom.loom}` : "Loom Alert"}
-            value={criticalLoom ? `${criticalLoom.rate}%` : "—"}
-            valueColor="text-red-600"
-            sub="highest defect"
-            accent="bg-red-600"
-            barColor="bg-red-600"
-            bar={criticalLoom ? Math.min(criticalLoom.rate * 8, 100) : 0}
-            animated={animated}
-          />
-          <KPI label="Revenue" value={formatINR(revenue)} sub="metres × price" accent="bg-indigo" barColor="bg-indigo" bar={70} animated={animated} />
-          <KPI
-            label="Lowest stock"
-            value={lowestStock ? `${lowestStock.days} d` : "—"}
-            valueColor="text-amber-600"
-            sub={lowestStock?.name || "—"}
-            accent="bg-amber-600"
-            barColor="bg-amber-600"
-            bar={lowestStock ? Math.min(lowestStock.days * 3, 100) : 0}
-            animated={animated}
-          />
+        {/* KPIs */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+          {[
+            {
+              t: "Production",
+              v: totals.meters.toLocaleString("en-IN"),
+              s: "metres",
+              color: "border-t-[#E8820C]",
+            },
+            {
+              t: "Avg Defect",
+              v: `${totals.avgPct.toFixed(2)}%`,
+              s: "auto",
+              color: "border-t-emerald-500",
+            },
+            {
+              t: totals.worst ? `Loom ${totals.worst.loom}` : "Highest defect",
+              v: totals.worst ? `${totals.worst.pct.toFixed(2)}%` : "—",
+              s: "highest defect",
+              color: "border-t-red-500",
+            },
+            {
+              t: "Revenue",
+              v: formatINR(totals.revenue),
+              s: "metres × price",
+              color: "border-t-blue-500",
+            },
+          ].map((k) => (
+            <div
+              key={k.t}
+              className={`bg-white border border-slate-200 rounded-xl p-4 border-t-4 ${k.color}`}
+            >
+              <div className="text-xs text-slate-500">{k.t}</div>
+              <div className="text-2xl font-bold text-[#0F1624] mt-1">{k.v}</div>
+              <div className="text-xs text-slate-400 mt-1">{k.s}</div>
+            </div>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-4 mb-4">
-          <div className="bg-white border border-border rounded-xl p-5">
-            <div className="text-sm font-semibold mb-3">Loom × Shift</div>
-            {loomRows.length === 0 ? (
-              <p className="text-sm text-muted text-center py-8">
-                No production in Supabase. <a href="/upload" className="text-saffron underline">Upload CSV</a>
+        <div className="grid lg:grid-cols-3 gap-4">
+          {/* Loom × Shift */}
+          <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-4 overflow-x-auto">
+            <h2 className="font-semibold text-[#0F1624] mb-3">Loom × Shift</h2>
+            {rows.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                No production rows. Use Upload to add CSV.
               </p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b text-left text-[10px] uppercase text-muted">
-                    <th className="py-1">Loom</th>
-                    <th>Shift</th>
-                    <th>Metres</th>
-                    <th>Defect %</th>
-                    <th>Status</th>
+                  <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                    <th className="py-2 pr-2">Loom</th>
+                    <th className="py-2 pr-2">Shift</th>
+                    <th className="py-2 pr-2">Metres</th>
+                    <th className="py-2 pr-2">Defect %</th>
+                    <th className="py-2">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loomRows.map((r, i) => (
-                    <tr key={i} className={`border-b border-border/50 ${r.status === "alert" ? "bg-red-50" : ""}`}>
-                      <td className="py-2 font-semibold">Loom {r.loom}</td>
-                      <td className="capitalize">{r.shift}</td>
-                      <td>{r.meters}</td>
-                      <td className={r.status === "alert" ? "text-red-600 font-semibold" : ""}>{r.rate}%</td>
-                      <td>{r.status === "alert" ? "🚨" : r.status === "watch" ? "Watch" : "OK"}</td>
+                  {rows.map((r, i) => (
+                    <tr key={i} className="border-t border-slate-50">
+                      <td className="py-2 pr-2 font-medium">Loom {r.loom}</td>
+                      <td className="py-2 pr-2 capitalize">{r.shift}</td>
+                      <td className="py-2 pr-2">{r.meters}</td>
+                      <td className="py-2 pr-2">{r.pct.toFixed(2)}%</td>
+                      <td className="py-2">
+                        <span
+                          className={
+                            r.status === "OK" ? "text-emerald-600" : "text-red-600"
+                          }
+                        >
+                          {r.status}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -299,83 +311,44 @@ export default function DashboardPage() {
             )}
           </div>
 
-          <div className="bg-white border border-border rounded-xl p-5">
-            <div className="text-sm font-semibold mb-3">Shift totals</div>
-            {(["morning", "afternoon", "night"] as const).map((s) => (
-              <div key={s} className="flex items-center gap-2 mb-2">
-                <span className="text-xs capitalize w-16 text-muted">{s}</span>
-                <div className="flex-1 h-5 bg-surface rounded overflow-hidden">
-                  <div
-                    className={`h-full text-[10px] text-white flex items-center pl-1 ${
-                      s === "morning" ? "bg-green-600" : s === "afternoon" ? "bg-saffron" : "bg-indigo"
-                    }`}
-                    style={{ width: animated ? `${Math.min(calcAchievementPct(shiftTotals[s], target), 100)}%` : "0%" }}
-                  >
-                    {calcAchievementPct(shiftTotals[s], target)}%
+          {/* Shift totals */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <h2 className="font-semibold text-[#0F1624] mb-3">Shift totals</h2>
+            <div className="space-y-3">
+              {Object.keys(totals.byShift).length === 0 && (
+                <p className="text-sm text-slate-500">No shifts yet.</p>
+              )}
+              {Object.entries(totals.byShift).map(([shift, m]) => {
+                const pct =
+                  totals.meters > 0 ? Math.round((m / totals.meters) * 100) : 0;
+                return (
+                  <div key={shift}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="capitalize text-slate-600">{shift}</span>
+                      <span className="font-medium">{m.toLocaleString("en-IN")} m</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
                   </div>
-                </div>
-                <span className="text-xs font-mono w-14 text-right">{shiftTotals[s]} m</span>
-              </div>
-            ))}
-            <div className="border-t mt-4 pt-3 text-xs text-muted">
-              Total {formatNumber(totalMeters)} m × ₹{company?.price_per_metre ?? 15} ={" "}
-              <span className="text-saffron font-bold text-sm">{formatINR(revenue)}</span>
+                );
+              })}
             </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-gradient-to-br from-ink to-ink-2 rounded-xl p-5 text-white">
-            <div className="font-bold mb-3">AI Insights</div>
-            {insights.map((ins, i) => (
-              <div key={i} className="text-sm text-white/80 mb-2 flex gap-2">
-                <span>{ins.type === "critical" ? "🔴" : ins.type === "warning" ? "🟡" : "🟢"}</span>
-                {ins.text}
-              </div>
-            ))}
-          </div>
-          <div className="bg-white border border-border rounded-xl p-5">
-            <div className="font-semibold text-sm mb-3">Inventory</div>
-            {inventoryItems.length === 0 ? (
-              <p className="text-sm text-muted">No inventory in Supabase</p>
-            ) : (
-              inventoryItems.map((item, i) => (
-                <div key={i} className="flex justify-between text-sm py-1.5 border-b border-border/50">
-                  <span>{item.icon} {item.name}</span>
-                  <span className={item.status === "low" ? "text-red-600 font-semibold" : "text-green-600"}>
-                    {item.days} days
-                  </span>
-                </div>
-              ))
-            )}
+            <p className="text-xs text-slate-500 mt-4">
+              Total {totals.meters.toLocaleString("en-IN")} m × ₹{price} ={" "}
+              <span className="font-semibold text-[#E8820C]">
+                {formatINR(totals.revenue)}
+              </span>
+            </p>
+            <p className="text-[10px] text-slate-400 mt-2">
+              Target ref: {target} m / shift (loom setup)
+            </p>
           </div>
         </div>
       </main>
-
-      {showToast && (
-        <div className="fixed bottom-6 right-6 bg-ink border border-saffron rounded-xl p-3 max-w-xs text-white text-sm">
-          <button className="absolute top-2 right-2 text-white/40" onClick={() => setShowToast(false)}>✕</button>
-          Dashboard loaded from Supabase
-        </div>
-      )}
-    </div>
-  );
-}
-
-function KPI({
-  label, value, sub, accent, barColor, bar, animated, valueColor = "text-ink",
-}: {
-  label: string; value: string; sub: string; accent: string; barColor: string; bar: number; animated: boolean; valueColor?: string;
-}) {
-  return (
-    <div className="bg-white border border-border rounded-xl p-3 relative overflow-hidden">
-      <div className={`absolute top-0 left-0 right-0 h-[3px] ${accent}`} />
-      <div className="text-[10px] text-muted">{label}</div>
-      <div className={`text-xl font-bold font-mono ${valueColor}`}>{value}</div>
-      <div className="text-[10px] text-muted">{sub}</div>
-      <div className="h-1 bg-border rounded mt-2 overflow-hidden">
-        <div className={`h-full ${barColor}`} style={{ width: animated ? `${bar}%` : 0 }} />
-      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
@@ -35,7 +35,10 @@ type Bucket = {
 
 export default function ReportsPage() {
   const router = useRouter();
+  const reportRef = useRef<HTMLDivElement>(null);
+
   const [loading, setLoading] = useState(true);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [email, setEmail] = useState("");
   const [plan, setPlan] = useState<PlanId | null>(null);
   const [company, setCompany] = useState<DbCompany | null>(null);
@@ -108,7 +111,10 @@ export default function ReportsPage() {
         });
       } else if (range === "month") {
         key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        label = d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+        label = d.toLocaleDateString("en-IN", {
+          month: "short",
+          year: "numeric",
+        });
       } else {
         key = String(d.getFullYear());
         label = key;
@@ -137,6 +143,50 @@ export default function ReportsPage() {
   }, [buckets, price]);
 
   const maxMeters = Math.max(...buckets.map((b) => b.meters), 1);
+
+  async function downloadPdf() {
+    if (!reportRef.current) return;
+    setPdfBusy(true);
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const { jsPDF } = await import("jspdf");
+
+      const canvas = await html2canvas(reportRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+      });
+      const img = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const imgWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let heightLeft = imgHeight;
+      let position = margin;
+
+      pdf.addImage(img, "PNG", margin, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight - margin * 2;
+
+      while (heightLeft > 0) {
+        position = margin - (imgHeight - heightLeft);
+        pdf.addPage();
+        pdf.addImage(img, "PNG", margin, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight - margin * 2;
+      }
+
+      const name = (company?.name || "loomvex").replace(/\s+/g, "-");
+      pdf.save(
+        `${name}-report-${range}-${new Date().toISOString().slice(0, 10)}.pdf`
+      );
+    } catch (e) {
+      console.error(e);
+      alert("PDF failed. Use browser Print → Save as PDF.");
+    }
+    setPdfBusy(false);
+  }
 
   if (loading) {
     return (
@@ -190,6 +240,9 @@ export default function ReportsPage() {
             History
           </Link>
           <span className="text-[#E8820C] font-semibold">Reports</span>
+          <Link href="/ai" className="text-white/70 hover:text-white">
+            AI
+          </Link>
         </div>
       </nav>
 
@@ -201,21 +254,27 @@ export default function ReportsPage() {
               {company?.name || "Company"} · production & revenue
             </p>
           </div>
-          <div className="flex gap-2 bg-white border border-slate-200 rounded-lg p-1">
-            {(["day", "month", "year"] as Range[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRange(r)}
-                className={`px-3 py-1.5 rounded-md text-sm font-semibold capitalize ${
-                  range === r
-                    ? "bg-[#E8820C] text-white"
-                    : "text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {r}
-              </button>
-            ))}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex gap-1 bg-white border border-slate-200 rounded-lg p-1">
+              {(["day", "month", "year"] as Range[]).map((r) => (
+                <button
+  type="button"
+  onClick={downloadPdf}
+  disabled={pdfBusy}
+  className="px-4 py-2 bg-[#E8820C] text-white rounded-lg text-sm font-semibold shadow-sm hover:bg-[#D4720A] disabled:opacity-60 border border-orange-400"
+>
+  {pdfBusy ? "Preparing PDF…" : "Download PDF"}
+</button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={downloadPdf}
+              disabled={pdfBusy}
+              className="px-4 py-2 bg-[#0F1624] text-white rounded-lg text-sm font-semibold disabled:opacity-60"
+            >
+              {pdfBusy ? "Preparing PDF…" : "Download PDF"}
+            </button>
           </div>
         </div>
 
@@ -225,86 +284,106 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* KPI cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-          {[
-            { t: "Production", v: `${totals.meters.toLocaleString("en-IN")} m` },
-            { t: "Revenue", v: formatINR(totals.revenue) },
-            { t: "Avg defect", v: `${totals.defectPct.toFixed(2)}%` },
-            { t: "Periods", v: String(totals.periods) },
-          ].map((k) => (
-            <div
-              key={k.t}
-              className="bg-white border border-slate-200 rounded-xl p-4"
-            >
-              <div className="text-xs text-slate-500">{k.t}</div>
-              <div className="text-lg font-bold text-[#0F1624] mt-1">{k.v}</div>
+        {/* PDF capture area: KPIs + chart + table */}
+        <div ref={reportRef} className="bg-white rounded-xl p-4 sm:p-6 space-y-6">
+          <div className="border-b border-slate-100 pb-3">
+            <div className="text-lg font-bold text-[#0F1624]">
+              Loomvex · {company?.name || "Report"}
             </div>
-          ))}
-        </div>
-
-        {/* Bar chart */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6">
-          <h2 className="text-sm font-semibold text-[#0F1624] mb-4">
-            Production by {range}
-          </h2>
-          {buckets.length === 0 ? (
-            <p className="text-sm text-slate-500">No data yet. Upload production CSV.</p>
-          ) : (
-            <div className="space-y-3">
-              {buckets.map((b) => {
-                const pct = Math.round((b.meters / maxMeters) * 100);
-                const defPct = b.meters > 0 ? (b.defect / b.meters) * 100 : 0;
-                return (
-                  <div key={b.key}>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="font-medium text-slate-700">{b.label}</span>
-                      <span className="text-slate-500">
-                        {b.meters.toLocaleString("en-IN")} m · {formatINR(b.meters * price)} ·
-                        defect {defPct.toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-[#E8820C] rounded-full"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="text-xs text-slate-500">
+              {range.toUpperCase()} report · {new Date().toLocaleDateString("en-IN")} · ₹
+              {price}/metre
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* Table */}
-        {buckets.length > 0 && (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              {
+                t: "Production",
+                v: `${totals.meters.toLocaleString("en-IN")} m`,
+              },
+              { t: "Revenue", v: formatINR(totals.revenue) },
+              { t: "Avg defect", v: `${totals.defectPct.toFixed(2)}%` },
+              { t: "Periods", v: String(totals.periods) },
+            ].map((k) => (
+              <div
+                key={k.t}
+                className="border border-slate-200 rounded-xl p-4"
+              >
+                <div className="text-xs text-slate-500">{k.t}</div>
+                <div className="text-lg font-bold text-[#0F1624] mt-1">{k.v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-[#0F1624] mb-4">
+              Production by {range}
+            </h2>
+            {buckets.length === 0 ? (
+              <p className="text-sm text-slate-500">No data yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {buckets.map((b) => {
+                  const pct = Math.round((b.meters / maxMeters) * 100);
+                  const defPct =
+                    b.meters > 0 ? (b.defect / b.meters) * 100 : 0;
+                  return (
+                    <div key={b.key}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="font-medium text-slate-700">
+                          {b.label}
+                        </span>
+                        <span className="text-slate-500">
+                          {b.meters.toLocaleString("en-IN")} m ·{" "}
+                          {formatINR(b.meters * price)} · defect{" "}
+                          {defPct.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#E8820C] rounded-full"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {buckets.length > 0 && (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                  <th className="px-4 py-3">Period</th>
-                  <th className="px-4 py-3">Metres</th>
-                  <th className="px-4 py-3">Defect %</th>
-                  <th className="px-4 py-3">Revenue</th>
+                  <th className="py-2 pr-2">Period</th>
+                  <th className="py-2 pr-2">Metres</th>
+                  <th className="py-2 pr-2">Defect %</th>
+                  <th className="py-2">Revenue</th>
                 </tr>
               </thead>
               <tbody>
                 {buckets.map((b) => {
-                  const defPct = b.meters > 0 ? (b.defect / b.meters) * 100 : 0;
+                  const defPct =
+                    b.meters > 0 ? (b.defect / b.meters) * 100 : 0;
                   return (
                     <tr key={b.key} className="border-t border-slate-50">
-                      <td className="px-4 py-2.5 font-medium">{b.label}</td>
-                      <td className="px-4 py-2.5">{b.meters.toLocaleString("en-IN")}</td>
-                      <td className="px-4 py-2.5">{defPct.toFixed(2)}%</td>
-                      <td className="px-4 py-2.5">{formatINR(b.meters * price)}</td>
+                      <td className="py-2 pr-2 font-medium">{b.label}</td>
+                      <td className="py-2 pr-2">
+                        {b.meters.toLocaleString("en-IN")}
+                      </td>
+                      <td className="py-2 pr-2">{defPct.toFixed(2)}%</td>
+                      <td className="py-2">
+                        {formatINR(b.meters * price)}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </div>
       </main>
     </div>
   );
